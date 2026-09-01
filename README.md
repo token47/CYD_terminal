@@ -55,9 +55,17 @@ WiFi (built-in)
 
 No manual library setup or file copying required. PlatformIO automatically downloads the ESP32 Core 3.x toolchain, dependencies, and configures `TFT_eSPI` via `platformio.ini`.
 
+Supported board environments in `platformio.ini`:
+- `esp32-2432s028r` (default): 2.8" CYD / CYD2USB (backlight GPIO 21, RGB order, dedicated touch driver)
+- `esp32-cyd-32`: 3.2" CYD FNK0103L_3P2 (backlight GPIO 27, BGR order, shared SPI touch)
+
 1. **Build firmware:**
    ```bash
+   # Build default 2.8" CYD
    pio run
+
+   # Or build for 3.2" CYD
+   pio run -e esp32-cyd-32
    ```
 2. **Upload to device:**
    ```bash

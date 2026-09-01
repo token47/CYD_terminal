@@ -33,6 +33,13 @@
 #define TOUCH_CS   33  // T_CS
 #define TOUCH_CLK  25  // T_CLK
 
+// Touch calibration for CYD (ESP32-2432S028R) in landscape mode
+#define TOUCH_CAL_X_MIN 200
+#define TOUCH_CAL_X_MAX 3800
+#define TOUCH_CAL_Y_MIN 240
+#define TOUCH_CAL_Y_MAX 3800
+#define TOUCH_PRESSURE_THRESHOLD 250
+
 // UART pins
 #define UART_RX 3
 #define UART_TX 1
