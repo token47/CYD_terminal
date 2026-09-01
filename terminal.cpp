@@ -20,16 +20,26 @@ static int currentBaudRate = 115200;
 static int currentMode = 0; // 0 = USB, 1 = External
 static HardwareSerial* terminalSerial = nullptr;
 
-// Screen buffer - now stores Unicode codepoints with scrollback
-static uint32_t screenBuffer[TERMINAL_BUFFER_ROWS][TERMINAL_COLS];
+// Terminal cell structure storing character and its color attributes
+struct TerminalCell {
+  uint32_t codepoint;
+  uint16_t fgColor;
+  uint16_t bgColor;
+};
+
+// Colors
+#define DEFAULT_FG_COLOR TFT_GREEN
+#define DEFAULT_BG_COLOR TFT_BLACK
+
+static uint16_t fgColor = DEFAULT_FG_COLOR;
+static uint16_t bgColor = DEFAULT_BG_COLOR;
+
+// Screen buffer - stores Unicode codepoints with colors and scrollback
+static TerminalCell screenBuffer[TERMINAL_BUFFER_ROWS][TERMINAL_COLS];
 static int cursorX = 0;
 static int cursorY = 0;
 static int scrollOffset = 0;  // Current scroll position (0 = bottom)
 static int totalLines = 0;    // Total lines written
-
-// Colors
-static uint16_t fgColor = TFT_GREEN;
-static uint16_t bgColor = TFT_BLACK;
 
 // ESC sequence parser state
 static char escBuffer[32];
@@ -42,6 +52,31 @@ static UTF8Decoder utf8Decoder;
 // Baud rates array
 const int baudRates[] = {9600, 19200, 38400, 57600, 115200, 230400};
 
+static uint16_t ansi256ToRGB565(uint8_t index) {
+  if (index < 8) {
+    const uint16_t standard[8] = {
+      TFT_BLACK, TFT_RED, TFT_GREEN, TFT_YELLOW,
+      TFT_BLUE, TFT_MAGENTA, TFT_CYAN, TFT_WHITE
+    };
+    return standard[index];
+  } else if (index < 16) {
+    const uint16_t bright[8] = {
+      TFT_DARKGREY, 0xFC08, 0x87F0, TFT_YELLOW,
+      0x5CF4, 0xFD1F, 0x7FFF, TFT_WHITE
+    };
+    return bright[index - 8];
+  } else if (index < 232) {
+    uint8_t idx = index - 16;
+    uint8_t r = (idx / 36) * 51;
+    uint8_t g = ((idx / 6) % 6) * 51;
+    uint8_t b = (idx % 6) * 51;
+    return tft.color565(r, g, b);
+  } else {
+    uint8_t gray = 8 + (index - 232) * 10;
+    return tft.color565(gray, gray, gray);
+  }
+}
+
 void terminalInit(int baudRateIndex, int mode) {
   currentMode = mode;
   currentBaudRate = baudRates[baudRateIndex];
@@ -49,10 +84,13 @@ void terminalInit(int baudRateIndex, int mode) {
   // Initialize UTF-8 decoder
   utf8Init(&utf8Decoder);
   
+  fgColor = DEFAULT_FG_COLOR;
+  bgColor = DEFAULT_BG_COLOR;
+  
   // Clear screen buffer
   for (int y = 0; y < TERMINAL_BUFFER_ROWS; y++) {
     for (int x = 0; x < TERMINAL_COLS; x++) {
-      screenBuffer[y][x] = ' ';
+      screenBuffer[y][x] = {' ', fgColor, bgColor};
     }
   }
   
@@ -78,7 +116,6 @@ void terminalInit(int baudRateIndex, int mode) {
 
 void terminalRedraw() {
   // Redraw visible portion of buffer with scroll offset
-  tft.setTextColor(fgColor, bgColor);
   tft.setTextFont(1);
   tft.setTextSize(1);
   
@@ -118,9 +155,10 @@ void terminalRedraw() {
       bufferLine = lineNumber % TERMINAL_BUFFER_ROWS;
     }
     
-    // Draw this line
+    // Draw this line with each cell's individual colors
     for (int x = 0; x < TERMINAL_COLS; x++) {
-      drawUnicodeChar(screenBuffer[bufferLine][x], x * 6, TERMINAL_START_Y + y * 8, fgColor, bgColor, 1);
+      const TerminalCell& cell = screenBuffer[bufferLine][x];
+      drawUnicodeChar(cell.codepoint, x * 6, TERMINAL_START_Y + y * 8, cell.fgColor, cell.bgColor, 1);
     }
   }
   
@@ -150,18 +188,19 @@ void terminalRedraw() {
       int screenY = TERMINAL_START_Y + visibleRows * 8;
       if (screenY + 8 <= maxY) {
         // First, clear the line area to remove old content
-        tft.fillRect(0, screenY, SCREEN_WIDTH - 4, 8, bgColor);
+        tft.fillRect(0, screenY, SCREEN_WIDTH - 4, 8, DEFAULT_BG_COLOR);
         
         // Then draw the content from buffer
         for (int x = 0; x < TERMINAL_COLS; x++) {
-          drawUnicodeChar(screenBuffer[bufferLine][x], x * 6, screenY, fgColor, bgColor, 1);
+          const TerminalCell& cell = screenBuffer[bufferLine][x];
+          drawUnicodeChar(cell.codepoint, x * 6, screenY, cell.fgColor, cell.bgColor, 1);
         }
         
         // Clear area below cursor line up to keyboard (remove artifacts)
         int clearStartY = screenY + 8;  // Start below cursor line
         int clearHeight = maxY - clearStartY;
         if (clearHeight > 0) {
-          tft.fillRect(0, clearStartY, SCREEN_WIDTH, clearHeight, bgColor);
+          tft.fillRect(0, clearStartY, SCREEN_WIDTH, clearHeight, DEFAULT_BG_COLOR);
         }
       }
     } else {
@@ -169,7 +208,7 @@ void terminalRedraw() {
       int lastRowY = TERMINAL_START_Y + visibleRows * 8;
       int clearHeight = maxY - lastRowY;
       if (clearHeight > 0) {
-        tft.fillRect(0, lastRowY, SCREEN_WIDTH, clearHeight, bgColor);
+        tft.fillRect(0, lastRowY, SCREEN_WIDTH, clearHeight, DEFAULT_BG_COLOR);
       }
     }
   }
@@ -178,7 +217,7 @@ void terminalRedraw() {
   // Clear scrollbar area first (before deciding whether to draw it)
   const int scrollbarX = SCREEN_WIDTH - 4;
   const int scrollbarWidth = 3;
-  tft.fillRect(scrollbarX, TERMINAL_START_Y, scrollbarWidth, maxY - TERMINAL_START_Y, bgColor);
+  tft.fillRect(scrollbarX, TERMINAL_START_Y, scrollbarWidth, maxY - TERMINAL_START_Y, DEFAULT_BG_COLOR);
   
   // Draw scrollbar if there's content to scroll (AFTER clearing area)
   if (totalLines > visibleRows) {
@@ -284,7 +323,7 @@ void scrollUp() {
   // Clear the line we're about to write to (which was the oldest line)
   int nextLine = totalLines % TERMINAL_BUFFER_ROWS;
   for (int x = 0; x < TERMINAL_COLS; x++) {
-    screenBuffer[nextLine][x] = ' ';
+    screenBuffer[nextLine][x] = {' ', fgColor, bgColor};
   }
   
   // Move cursor to the new line position in the circular buffer
@@ -304,7 +343,7 @@ void putChar(uint32_t codepoint) {
     // Clear the new line we just moved to
     if (cursorY < TERMINAL_BUFFER_ROWS) {
       for (int x = 0; x < TERMINAL_COLS; x++) {
-        screenBuffer[cursorY][x] = ' ';
+        screenBuffer[cursorY][x] = {' ', fgColor, bgColor};
       }
     }
     
@@ -343,7 +382,7 @@ void putChar(uint32_t codepoint) {
   } else if (codepoint == '\b') {
     if (cursorX > 0) {
       cursorX--;
-      screenBuffer[cursorY][cursorX] = ' ';
+      screenBuffer[cursorY][cursorX] = {' ', fgColor, bgColor};
       
       // Redraw character if cursor line is visible
       extern bool keyboardVisible;
@@ -378,8 +417,8 @@ void putChar(uint32_t codepoint) {
       }
     }
   } else if (codepoint >= 32) {
-    // Printable character (ASCII or Unicode)
-    screenBuffer[cursorY][cursorX] = codepoint;
+    // Printable character (ASCII or Unicode) with current colors
+    screenBuffer[cursorY][cursorX] = {codepoint, fgColor, bgColor};
     
     // Draw character if cursor line is visible
     extern bool keyboardVisible;
@@ -407,7 +446,6 @@ void putChar(uint32_t codepoint) {
     if (firstLineToShow < 0) firstLineToShow = 0;
     
     // Check if cursor line is visible (allow cursor line to be drawn beyond visibleRows)
-    // We show 5 rows, but cursor can be on 6th row (index 5)
     if (cursorLineNumber >= firstLineToShow && cursorLineNumber <= firstLineToShow + visibleRows) {
       int screenY = TERMINAL_START_Y + (cursorLineNumber - firstLineToShow) * 8;
       if (screenY < maxY) {
@@ -418,7 +456,6 @@ void putChar(uint32_t codepoint) {
     cursorX++;
     
     // After moving cursor, ensure it's still visible when keyboard is open
-    extern bool keyboardVisible;
     if (keyboardVisible) {
       terminalRedraw();  // Redraw to show cursor at new position
     }
@@ -430,7 +467,7 @@ void putChar(uint32_t codepoint) {
       // Clear the new line we just moved to
       if (cursorY < TERMINAL_BUFFER_ROWS) {
         for (int x = 0; x < TERMINAL_COLS; x++) {
-          screenBuffer[cursorY][x] = ' ';
+          screenBuffer[cursorY][x] = {' ', fgColor, bgColor};
         }
       }
       
@@ -449,7 +486,6 @@ void putChar(uint32_t codepoint) {
         ensureCursorVisible();
         
         // If no keyboard, just redraw
-        extern bool keyboardVisible;
         if (!keyboardVisible) {
           terminalRedraw();
         }
@@ -464,12 +500,12 @@ void putChar(uint32_t codepoint) {
 void processEscSequence() {
   escBuffer[escIndex] = '\0';
   
-  // Parse ESC sequence
+  // Parse ESC sequence (CSI)
   if (escIndex >= 2 && escBuffer[0] == '[') {
     char cmd = escBuffer[escIndex - 1];
     
     // Extract parameters
-    int params[4] = {0, 0, 0, 0};
+    int params[16] = {0};
     int paramCount = 0;
     int num = 0;
     bool hasNum = false;
@@ -479,14 +515,14 @@ void processEscSequence() {
         num = num * 10 + (escBuffer[i] - '0');
         hasNum = true;
       } else if (escBuffer[i] == ';') {
-        if (hasNum && paramCount < 4) {
-          params[paramCount++] = num;
+        if (paramCount < 16) {
+          params[paramCount++] = hasNum ? num : 0;
         }
         num = 0;
         hasNum = false;
       }
     }
-    if (hasNum && paramCount < 4) {
+    if (paramCount < 16 && (hasNum || paramCount > 0)) {
       params[paramCount++] = num;
     }
     
@@ -501,42 +537,93 @@ void processEscSequence() {
         break;
         
       case 'J': // Clear screen
-        if (params[0] == 2) {
+        if (paramCount == 0 || params[0] == 2 || params[0] == 0) {
           terminalClear();
         }
         break;
         
       case 'K': // Clear line
         for (int x = cursorX; x < TERMINAL_COLS; x++) {
-          screenBuffer[cursorY][x] = ' ';
+          screenBuffer[cursorY][x] = {' ', fgColor, bgColor};
         }
         terminalRedraw();
         break;
         
-      case 'm': // Graphics mode (colors)
-        if (paramCount == 0 || params[0] == 0) {
-          // Reset
-          fgColor = TFT_GREEN;
-          bgColor = TFT_BLACK;
-        } else {
-          // Basic color support
-          for (int i = 0; i < paramCount; i++) {
-            if (params[i] >= 30 && params[i] <= 37) {
-              // Foreground color
-              switch (params[i]) {
-                case 30: fgColor = TFT_BLACK; break;
-                case 31: fgColor = TFT_RED; break;
-                case 32: fgColor = TFT_GREEN; break;
-                case 33: fgColor = TFT_YELLOW; break;
-                case 34: fgColor = TFT_BLUE; break;
-                case 35: fgColor = TFT_MAGENTA; break;
-                case 36: fgColor = TFT_CYAN; break;
-                case 37: fgColor = TFT_WHITE; break;
-              }
+      case 'm': { // Graphics mode (colors and attributes)
+        if (paramCount == 0) {
+          // ESC[m is equivalent to ESC[0m (reset)
+          fgColor = DEFAULT_FG_COLOR;
+          bgColor = DEFAULT_BG_COLOR;
+          break;
+        }
+        
+        for (int i = 0; i < paramCount; i++) {
+          int p = params[i];
+          if (p == 0) {
+            // Reset to default colors
+            fgColor = DEFAULT_FG_COLOR;
+            bgColor = DEFAULT_BG_COLOR;
+          } else if (p == 7) {
+            // Inverse video
+            uint16_t tmp = fgColor;
+            fgColor = bgColor;
+            bgColor = tmp;
+          } else if (p >= 30 && p <= 37) {
+            // Standard foreground colors (Black, Red, Green, Yellow, Blue, Magenta, Cyan, White)
+            const uint16_t stdColors[8] = {
+              TFT_BLACK, TFT_RED, TFT_GREEN, TFT_YELLOW,
+              TFT_BLUE, TFT_MAGENTA, TFT_CYAN, TFT_WHITE
+            };
+            fgColor = stdColors[p - 30];
+          } else if (p == 38) {
+            // Extended foreground: 38;5;n (256 colors) or 38;2;r;g;b (TrueColor)
+            if (i + 2 < paramCount && params[i + 1] == 5) {
+              fgColor = ansi256ToRGB565((uint8_t)params[i + 2]);
+              i += 2;
+            } else if (i + 4 < paramCount && params[i + 1] == 2) {
+              fgColor = tft.color565(params[i + 2], params[i + 3], params[i + 4]);
+              i += 4;
             }
+          } else if (p == 39) {
+            // Default foreground
+            fgColor = DEFAULT_FG_COLOR;
+          } else if (p >= 40 && p <= 47) {
+            // Standard background colors
+            const uint16_t stdColors[8] = {
+              TFT_BLACK, TFT_RED, TFT_GREEN, TFT_YELLOW,
+              TFT_BLUE, TFT_MAGENTA, TFT_CYAN, TFT_WHITE
+            };
+            bgColor = stdColors[p - 40];
+          } else if (p == 48) {
+            // Extended background: 48;5;n (256 colors) or 48;2;r;g;b (TrueColor)
+            if (i + 2 < paramCount && params[i + 1] == 5) {
+              bgColor = ansi256ToRGB565((uint8_t)params[i + 2]);
+              i += 2;
+            } else if (i + 4 < paramCount && params[i + 1] == 2) {
+              bgColor = tft.color565(params[i + 2], params[i + 3], params[i + 4]);
+              i += 4;
+            }
+          } else if (p == 49) {
+            // Default background
+            bgColor = DEFAULT_BG_COLOR;
+          } else if (p >= 90 && p <= 97) {
+            // High-intensity (bright) foreground colors
+            const uint16_t brightColors[8] = {
+              TFT_DARKGREY, 0xFC08, 0x87F0, TFT_YELLOW,
+              0x5CF4, 0xFD1F, 0x7FFF, TFT_WHITE
+            };
+            fgColor = brightColors[p - 90];
+          } else if (p >= 100 && p <= 107) {
+            // High-intensity (bright) background colors
+            const uint16_t brightColors[8] = {
+              TFT_DARKGREY, 0xFC08, 0x87F0, TFT_YELLOW,
+              0x5CF4, 0xFD1F, 0x7FFF, TFT_WHITE
+            };
+            bgColor = brightColors[p - 100];
           }
         }
         break;
+      }
         
       case 'A': // Cursor up
         if (params[0] == 0) params[0] = 1;
@@ -570,7 +657,9 @@ void processEscSequence() {
 }
 
 void terminalUpdate() {
-  if (terminalSerial && terminalSerial->available()) {
+  int processed = 0;
+  while (terminalSerial && terminalSerial->available() && processed < 256) {
+    processed++;
     // Mark RX activity (external variable from main)
     extern unsigned long lastRxTime;
     lastRxTime = millis();
@@ -582,8 +671,8 @@ void terminalUpdate() {
       if (escIndex < sizeof(escBuffer) - 1) {
         escBuffer[escIndex++] = byte;
         
-        // Check if sequence is complete
-        if ((byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z')) {
+        // Check if sequence is complete (CSI termination range 0x40..0x7E)
+        if ((byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z') || byte == '@' || byte == '`' || byte == '~') {
           processEscSequence();
         }
       } else {
@@ -599,7 +688,6 @@ void terminalUpdate() {
       // Normal character - decode UTF-8
       if (utf8Decode(&utf8Decoder, byte)) {
         uint32_t codepoint = utf8GetCodepoint(&utf8Decoder);
-        // Serial.printf("Received codepoint: U+%04X\n", codepoint);
         
         // Log to SD after successful UTF-8 decoding
         sdLogRXCodepoint(codepoint);
@@ -704,7 +792,7 @@ void terminalClear() {
   // Clear buffer
   for (int y = 0; y < TERMINAL_BUFFER_ROWS; y++) {
     for (int x = 0; x < TERMINAL_COLS; x++) {
-      screenBuffer[y][x] = ' ';
+      screenBuffer[y][x] = {' ', fgColor, bgColor};
     }
   }
   cursorX = 0;
@@ -718,9 +806,9 @@ void terminalClear() {
 }
 
 void terminalReset() {
+  fgColor = DEFAULT_FG_COLOR;
+  bgColor = DEFAULT_BG_COLOR;
   terminalClear();
-  fgColor = TFT_GREEN;
-  bgColor = TFT_BLACK;
 }
 
 void drawScrollbar(int maxY) {
