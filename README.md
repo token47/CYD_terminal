@@ -51,7 +51,28 @@ WiFi (built-in)
 
 ## Installation
 
-### 1. TFT_eSPI Configuration
+### Option A: PlatformIO (Recommended)
+
+No manual library setup or file copying required. PlatformIO automatically downloads the ESP32 Core 3.x toolchain, dependencies, and configures `TFT_eSPI` via `platformio.ini`.
+
+1. **Build firmware:**
+   ```bash
+   pio run
+   ```
+2. **Upload to device:**
+   ```bash
+   pio run -t upload
+   ```
+3. **Open Serial Monitor:**
+   ```bash
+   pio device monitor
+   ```
+
+---
+
+### Option B: Arduino IDE 2.x
+
+#### 1. TFT_eSPI Configuration
 Copy `User_Setup_CYD.h` to `Arduino/libraries/TFT_eSPI/User_Setup_CYD.h`
 
 Edit `Arduino/libraries/TFT_eSPI/User_Setup_Select.h`:
@@ -59,9 +80,9 @@ Edit `Arduino/libraries/TFT_eSPI/User_Setup_Select.h`:
 #include <User_Setup_CYD.h>
 ```
 
-### 2. Upload Code
+#### 2. Upload Code
 1. Open `CYD_Terminal.ino` in Arduino IDE
-2. Select board: "ESP32 Dev Module"
+2. Select board: "ESP32 Dev Module" (ensure ESP32 Core v3.x is installed in Boards Manager)
 3. Select port
 4. Upload
 
